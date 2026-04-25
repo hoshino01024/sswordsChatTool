@@ -1296,8 +1296,8 @@
       </div>
       <div class="form-group">
         <label class="form-label">API 基础地址 (Base URL)</label>
-        <input class="form-input mono" id="api-base" placeholder="https://api.ppwords.com/v1" value="https://api.ppwords.com/v1">
-        <div class="form-hint">ppwords.com 兼容 OpenAI API 格式，默认端点如上</div>
+        <input class="form-input mono" id="api-base" placeholder="https://ppwords.com/v1" value="https://ppwords.com/v1">
+        <div class="form-hint">端点地址，消息发送使用 /chat/completions，如 https://ppwords.com/v1</div>
       </div>
       <div class="form-group">
         <label class="form-label">API 密钥 (API Key)</label>
@@ -1822,7 +1822,15 @@ function loadState() {
     renderMessages();
   }
   if (STATE.apiBase && STATE.apiKey) {
+    // Restore model label first
+    if (STATE.currentModel) {
+      document.getElementById('model-selector-label').textContent = STATE.currentModel;
+    }
     fetchModels();
+  }
+  // If no apiBase set, use default
+  if (!STATE.apiBase) {
+    STATE.apiBase = 'https://ppwords.com/v1';
   }
   updateTokenCount();
 }
@@ -2074,6 +2082,10 @@ function renderChatList() {
 // ════════════════════════════════════════════════════════
 function renderMessages() {
   const container = document.getElementById('messages');
+  // 🔧 修复：若 currentChatId 指向不存在的 chat，自动清除
+  if (STATE.currentChatId && !STATE.chats[STATE.currentChatId]) {
+    STATE.currentChatId = null;
+  }
   const chat = STATE.currentChatId ? STATE.chats[STATE.currentChatId] : null;
 
   if (!chat || !chat.messages.length) {
@@ -2206,14 +2218,19 @@ async function sendMessage(content) {
   if (!text) return;
 
   if (!STATE.apiKey) { openApiPanel(); showToast('请先配置 API 密钥', 'error'); return; }
-  if (!STATE.currentModel) { showToast('请先选择模型', 'error'); return; }
+  if (!STATE.currentModel) { showToast('请先在顶部选择或输入模型名称', 'error'); toggleModelDropdown(); return; }
 
   input.value = '';
   autoResize(input);
 
-  if (!STATE.currentChatId) newChat();
+  // 🔧 核心修复：确保 chat 存在，若 currentChatId 无效则新建
+  if (!STATE.currentChatId || !STATE.chats[STATE.currentChatId]) {
+    newChat();
+  }
 
   const chat = STATE.chats[STATE.currentChatId];
+  if (!chat) { showToast('创建对话失败，请刷新页面', 'error'); return; }
+
   // Auto-title first message
   if (!chat.messages.length) {
     chat.title = text.slice(0, 30) + (text.length > 30 ? '...' : '');
@@ -2236,7 +2253,7 @@ async function sendMessage(content) {
   STATE.isStreaming = true;
   setSendBtn(true);
 
-  const base = STATE.apiBase.replace(/\/$/, '');
+  const base = (STATE.apiBase || 'https://ppwords.com/v1').replace(/\/$/, '');
   const useStream = document.getElementById('stream-toggle').classList.contains('on');
 
   const body = {
@@ -2244,7 +2261,7 @@ async function sendMessage(content) {
     messages: msgs,
     temperature: parseFloat(document.getElementById('temp-slider').value),
     top_p: parseFloat(document.getElementById('top-p-slider').value),
-    max_tokens: parseInt(document.getElementById('max-tokens').value),
+    max_tokens: parseInt(document.getElementById('max-tokens').value) || 4096,
     frequency_penalty: parseFloat(document.getElementById('freq-slider').value),
     presence_penalty: parseFloat(document.getElementById('pres-slider').value),
     stream: useStream,
@@ -2266,9 +2283,14 @@ async function sendMessage(content) {
   } catch(e) {
     removeTypingIndicator();
     if (e.name !== 'AbortError') {
-      chat.messages.push({ role: 'assistant', content: `请求失败: ${e.message}`, error: true, timestamp: Date.now(), model: STATE.currentModel });
+      const errMsg = e.message || '未知错误';
+      const hint = errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError')
+        ? `网络连接失败（可能是 CORS 或 API 地址错误）。\n当前地址: ${base}\n请检查 API 设置。`
+        : `请求失败: ${errMsg}`;
+      chat.messages.push({ role: 'assistant', content: hint, error: true, timestamp: Date.now(), model: STATE.currentModel });
       renderMessages();
-      showToast('请求失败，可点击消息中的重试按钮', 'error');
+      showToast('请求失败，请检查 API 设置', 'error');
+      setStatus('error');
     }
   } finally {
     STATE.isStreaming = false;
@@ -2508,7 +2530,7 @@ function saveTools() {
 //  SETTINGS PANELS
 // ════════════════════════════════════════════════════════
 function openApiPanel() {
-  document.getElementById('api-base').value = STATE.apiBase || 'https://api.ppwords.com/v1';
+  document.getElementById('api-base').value = STATE.apiBase || 'https://ppwords.com/v1';
   document.getElementById('api-key').value = STATE.apiKey || '';
   document.getElementById('api-default-model').value = STATE.currentModel || '';
   openPanel('api-panel');
@@ -2517,7 +2539,7 @@ function openApiPanel() {
 function saveApiSettings() {
   STATE.apiBase = document.getElementById('api-base').value.trim();
   STATE.apiKey = document.getElementById('api-key').value.trim();
-  if (!STATE.apiBase) STATE.apiBase = 'https://api.ppwords.com/v1';
+  if (!STATE.apiBase) STATE.apiBase = 'https://ppwords.com/v1';
   const modelInput = document.getElementById('api-default-model').value.trim();
   if (modelInput) {
     STATE.currentModel = modelInput;
